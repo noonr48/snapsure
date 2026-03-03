@@ -8,6 +8,16 @@ from PyQt5.QtCore import QRect
 from PIL import Image
 import numpy as np
 
+# Try to import pipewire-capture for fast capture
+HAS_PIPEWIRE_CAPTURE = False
+try:
+    from pipewire_capture import PortalCapture, CaptureStream, is_available
+    HAS_PIPEWIRE_CAPTURE = is_available()
+    if HAS_PIPEWIRE_CAPTURE:
+        print("pipewire-capture available for fast PipeWire capture")
+except ImportError:
+    print("pipewire-capture not available, using slower Spectacle fallback")
+
 # Try to import GStreamer for fast PipeWire capture
 HAS_GSTREAMER = False
 try:
@@ -253,10 +263,14 @@ class SpectacleCapture:
         return len(self.frames)
 
 
-# Use Spectacle capture (reliable on KDE Wayland)
-# PipeWire requires xdg-desktop-portal session setup which is complex
-TimerCapture = SpectacleCapture
-print("Using Spectacle capture (~4 fps on KDE Wayland)")
+# Use fast PipeWire capture when available, fallback to Spectacle
+if HAS_PIPEWIRE_CAPTURE:
+    from .pipewire_fast import PipeWireFastCapture
+    TimerCapture = PipeWireFastCapture
+    print("Using fast PipeWire capture (~20-30 fps)")
+else:
+    TimerCapture = SpectacleCapture
+    print("Using Spectacle capture (~4 fps on KDE Wayland)")
 
 
 if __name__ == "__main__":

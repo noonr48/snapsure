@@ -32,8 +32,8 @@ from PyQt5.QtCore import Qt, QRect, QTimer
 from PyQt5.QtGui import QGuiApplication, QIcon, QPixmap, QPainter, QColor, QFont
 
 from capture.selection import SelectionOverlay
-from capture.qt_capture import TimerCapture
-from stitch.matcher import stitch_frames, deduplicate_frames
+from capture.qt_capture import TimerCapture, HAS_PIPEWIRE_CAPTURE
+from stitch.matcher import stitch_frames
 from output.pdf_generator import save_as_pdf, save_as_image
 from utils.notifications import notify
 
@@ -60,12 +60,18 @@ class WayYaSnitch:
     def toggle_capture(self):
         """Toggle between idle/capturing states."""
         if self.state == self.STATE_IDLE:
-            self.start_selection()
+            if HAS_PIPEWIRE_CAPTURE:
+                # PipeWire has its own picker - skip region selection
+                self.capture_region = QRect()  # Empty region
+                self.start_capturing()
+            else:
+                # Spectacle needs manual region selection
+                self.start_selection()
         elif self.state == self.STATE_CAPTURING:
             self.stop_capture()
 
     def start_selection(self):
-        """Show selection overlay for region selection."""
+        """Show selection overlay for region selection (Spectacle only)."""
         self.state = self.STATE_SELECTING
         notify("WayYaSnitch", "Drag to select capture region")
 
@@ -79,22 +85,42 @@ class WayYaSnitch:
         self.start_capturing()
 
     def start_capturing(self):
-        """Start capturing frames using Spectacle."""
+        """Start capturing frames."""
         self.state = self.STATE_CAPTURING
         self._set_tray_recording(True)
-        notify("WayYaSnitch", "Recording... Scroll slowly!")
+
+        if HAS_PIPEWIRE_CAPTURE:
+            notify("WayYaSnitch", "Select window/screen in dialog, then scroll!")
+        else:
+            notify("WayYaSnitch", "Recording... Scroll slowly!")
 
         # Create capturer with memory full callback
+        # Higher FPS (12) for better overlap detection with smaller overlaps
         self.capturer = TimerCapture(
             self.capture_region,
-            fps=20,
-            on_memory_full=self.stop_capture  # Auto-stitch when memory full
+            fps=12,  # 12 fps = ~83ms between frames, smaller overlaps
+            on_memory_full=self.stop_capture,  # Auto-stitch when memory full
+            on_selection_cancelled=self.on_selection_cancelled  # Handle cancelled selection
         )
         self.capturer.start()
+
+    def on_selection_cancelled(self):
+        """Handle when user cancels the window selection dialog."""
+        print("[DEBUG] Window selection was cancelled - resetting to idle")
+        self.state = self.STATE_IDLE
+        self._set_tray_recording(False)
+        self.capturer = None
+        notify("WayYaSnitch", "Selection cancelled")
 
     def stop_capture(self):
         """Stop capturing and process frames."""
         if self.capturer is None:
+            return
+
+        # Check if capture has actually started (for PipeWire)
+        if hasattr(self.capturer, 'has_started') and not self.capturer.has_started():
+            notify("WayYaSnitch", "Still waiting for window selection...", "warning")
+            print("[DEBUG] Cannot stop - window selection not complete yet")
             return
 
         self.state = self.STATE_PROCESSING
@@ -103,6 +129,13 @@ class WayYaSnitch:
         frames = self.capturer.stop()
         frame_count = len(frames)
 
+        print(f"=== CAPTURE DEBUG ===")
+        print(f"Total frames captured: {frame_count}")
+        if frame_count > 0:
+            print(f"Frame 0 size: {frames[0].shape}")
+            if frame_count > 1:
+                print(f"Frame 1 size: {frames[1].shape}")
+
         if frame_count < 2:
             notify("WayYaSnitch", f"Only {frame_count} frames. Scroll more!", "critical")
             self.state = self.STATE_IDLE
@@ -110,11 +143,9 @@ class WayYaSnitch:
 
         notify("WayYaSnitch", f"Stitching {frame_count} frames...")
 
-        # Skip deduplication - let stitching handle overlaps
-        # The stitching algorithm handles overlapping content naturally
-
         # Stitch frames together
         result = stitch_frames(frames)
+        print(f"Stitched result size: {result.shape if result is not None else 'None'}")
 
         if result is None:
             notify("WayYaSnitch", "Stitching failed!", "critical")

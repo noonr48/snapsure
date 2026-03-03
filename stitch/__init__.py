@@ -1,1 +1,1 @@
-from .matcher import find_overlap, stitch_frames
+from .matcher import stitch_frames, deduplicate_identical_frames
