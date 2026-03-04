@@ -55,10 +55,11 @@ def find_overlap_multi_strip(prev: np.ndarray, curr: np.ndarray,
 
 
 def check_for_duplicates(result: np.ndarray, new_content: np.ndarray,
-                         threshold: float = 0.85) -> bool:
+                         threshold: float = 0.92) -> bool:
     """
     Check if new_content already exists in result (prevents back-scrolling duplicates).
-    Uses high threshold to avoid false positives.
+    Uses VERY high threshold (0.92) to avoid false positives.
+    Only searches the very bottom of result (last 15%).
     """
     if result.shape[1] != new_content.shape[1]:
         return False
@@ -66,21 +67,22 @@ def check_for_duplicates(result: np.ndarray, new_content: np.ndarray,
     h_result = result.shape[0]
     h_new = new_content.shape[0]
 
-    # Only search bottom 30% of result (most recent content)
-    search_start = int(h_result * 0.7)
+    # Only search the very bottom 15% of result (most recent content)
+    search_start = int(h_result * 0.85)
     if search_start >= h_result:
         return False
 
     search_area = result[search_start:, :]
 
-    # Use a 150px strip from top of new content
-    strip_height = min(150, h_new)
+    # Use a 100px strip from top of new content
+    strip_height = min(100, h_new)
     strip = new_content[:strip_height, :]
 
     try:
         match_result = cv2.matchTemplate(search_area, strip, cv2.TM_CCOEFF_NORMED)
         min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(match_result)
 
+        # Only skip if VERY high confidence match (0.92+)
         if max_val > threshold:
             return True
     except Exception:
@@ -185,16 +187,16 @@ def stitch_frames_simple(frames: List[np.ndarray]) -> Optional[np.ndarray]:
             # Insufficient overlap - skip this frame
             print(f"  ⚠ Insufficient overlap, skipped frame")
 
-    # KEY FIX: Always include the last 3 frames to ensure we capture the end of the page
+    # KEY FIX: Always include the last 5 frames to ensure we capture the end of the page
     # Even with low confidence, we include them to prevent truncation at the bottom
     print(f"\n=== ENSURING END CAPTURE ===")
-    last_frames_to_include = min(3, len(frames))
+    last_frames_to_include = min(5, len(frames))
     for i in range(len(frames) - last_frames_to_include, len(frames)):
         if i == 0:  # First frame already included
             continue
         frame = frames[i]
-        # Take the bottom 80% of the frame (skip likely overlap with previous)
-        new_portion = frame[int(frame.shape[0] * 0.2):, :]
+        # Take the bottom 90% of the frame (smaller overlap assumption)
+        new_portion = frame[int(frame.shape[0] * 0.1):, :]
         if new_portion.shape[0] > 50:
             if not check_for_duplicates(result, new_portion):
                 result = np.vstack([result, new_portion])
