@@ -185,6 +185,22 @@ def stitch_frames_simple(frames: List[np.ndarray]) -> Optional[np.ndarray]:
             # Insufficient overlap - skip this frame
             print(f"  ⚠ Insufficient overlap, skipped frame")
 
+    # KEY FIX: Always include the last 3 frames to ensure we capture the end of the page
+    # Even with low confidence, we include them to prevent truncation at the bottom
+    print(f"\n=== ENSURING END CAPTURE ===")
+    last_frames_to_include = min(3, len(frames))
+    for i in range(len(frames) - last_frames_to_include, len(frames)):
+        if i == 0:  # First frame already included
+            continue
+        frame = frames[i]
+        # Take the bottom 80% of the frame (skip likely overlap with previous)
+        new_portion = frame[int(frame.shape[0] * 0.2):, :]
+        if new_portion.shape[0] > 50:
+            if not check_for_duplicates(result, new_portion):
+                result = np.vstack([result, new_portion])
+                frames_added += 1
+                print(f"  ✓ End capture: Added frame {i} ({new_portion.shape[0]}px)")
+
     print(f"\n=== RESULTS ===")
     print(f"Frames processed: {len(frames)}")
     print(f"Frames added: {frames_added}")

@@ -9,6 +9,7 @@ Capture: Click tray icon (green "S")
 import sys
 import os
 import signal
+import faulthandler
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -59,16 +60,24 @@ class WayYaSnitch:
 
     def toggle_capture(self):
         """Toggle between idle/capturing states."""
-        if self.state == self.STATE_IDLE:
-            if HAS_PIPEWIRE_CAPTURE:
-                # PipeWire has its own picker - skip region selection
-                self.capture_region = QRect()  # Empty region
-                self.start_capturing()
-            else:
-                # Spectacle needs manual region selection
-                self.start_selection()
-        elif self.state == self.STATE_CAPTURING:
-            self.stop_capture()
+        try:
+            print(f"[DEBUG] toggle_capture called, state={self.state}")
+            if self.state == self.STATE_IDLE:
+                if HAS_PIPEWIRE_CAPTURE:
+                    # PipeWire has its own picker - skip region selection
+                    self.capture_region = QRect()  # Empty region
+                    self.start_capturing()
+                else:
+                    # Spectacle needs manual region selection
+                    self.start_selection()
+            elif self.state == self.STATE_CAPTURING:
+                self.stop_capture()
+        except Exception as e:
+            print(f"[ERROR] toggle_capture failed: {e}")
+            import traceback
+            traceback.print_exc()
+            self.state = self.STATE_IDLE
+            self._set_tray_recording(False)
 
     def start_selection(self):
         """Show selection overlay for region selection (Spectacle only)."""
@@ -86,6 +95,7 @@ class WayYaSnitch:
 
     def start_capturing(self):
         """Start capturing frames."""
+        print(f"[DEBUG] start_capturing called, HAS_PIPEWIRE_CAPTURE={HAS_PIPEWIRE_CAPTURE}")
         self.state = self.STATE_CAPTURING
         self._set_tray_recording(True)
 
@@ -96,13 +106,23 @@ class WayYaSnitch:
 
         # Create capturer with memory full callback
         # Higher FPS (12) for better overlap detection with smaller overlaps
-        self.capturer = TimerCapture(
-            self.capture_region,
-            fps=12,  # 12 fps = ~83ms between frames, smaller overlaps
-            on_memory_full=self.stop_capture,  # Auto-stitch when memory full
-            on_selection_cancelled=self.on_selection_cancelled  # Handle cancelled selection
-        )
-        self.capturer.start()
+        print("[DEBUG] Creating TimerCapture...")
+        try:
+            self.capturer = TimerCapture(
+                self.capture_region,
+                fps=12,  # 12 fps = ~83ms between frames, smaller overlaps
+                on_memory_full=self.stop_capture,  # Auto-stitch when memory full
+                on_selection_cancelled=self.on_selection_cancelled  # Handle cancelled selection
+            )
+            print("[DEBUG] TimerCapture created, calling start()...")
+            self.capturer.start()
+            print("[DEBUG] capturer.start() returned")
+        except Exception as e:
+            print(f"[ERROR] Failed to start capturer: {e}")
+            import traceback
+            traceback.print_exc()
+            self.state = self.STATE_IDLE
+            self._set_tray_recording(False)
 
     def on_selection_cancelled(self):
         """Handle when user cancels the window selection dialog."""
@@ -254,8 +274,21 @@ def main():
     snitch.tray_icon = setup_tray_icon(app, snitch)
 
     # Handle signals
-    signal.signal(signal.SIGINT, lambda s, f: app.quit())
-    signal.signal(signal.SIGTERM, lambda s, f: app.quit())
+    # Set up Unix signal handling for Qt
+    # Note: Qt handles signals differently
+    import faulthandler
+    # Enable faulthandler for debugging crashes
+    faulthandler.enable()
+
+    # Override signal handlers to prevent Qt crashes
+    def handle_sigint(signum, frame):
+        print(f"[SIGNAL] Received signal {signum} - ignoring")
+
+    def handle_sigterm(signum, frame):
+        print(f"[SIGNAL] Received signal {signum} - ignoring")
+
+    signal.signal(signal.SIGINT, handle_sigint)
+    signal.signal(signal.SIGTERM, handle_sigterm)
 
     sys.exit(app.exec_())
 
